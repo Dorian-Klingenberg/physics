@@ -71,6 +71,8 @@ The project should start with correct, readable CPU implementations, then evolve
 - GPU compute paths for field updates, particles, and visualization
 - profiling-driven optimization
 
+The preferred interactive implementation stack is **C++23 + DirectX 12 + Dear ImGui**. DirectX 12 is the rendering/GPU target, and ImGui is the preferred way to expose live controls, debug panels, parameter tuning, and simulation diagnostics.
+
 Performance work should be motivated by measured bottlenecks. The portfolio value comes from showing the path from simple model to optimized system.
 
 ## Physics Stance
@@ -104,6 +106,7 @@ More personal version:
 ## Suggested Build Direction
 
 Use the targeted reading path in `docs/selective-physics-curriculum.md` alongside this build direction. The curriculum maps Serway/Beichner chapters and *The Art of Modeling Dynamic Systems* to the specific simulations below.
+Use `docs/simulation-selection-preferences.md` when choosing which textbook questions should become simulations.
 
 1. Build a clean scalar field substrate.
 2. Add clocks and proper-time accumulation.

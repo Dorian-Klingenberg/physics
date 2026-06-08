@@ -181,6 +181,8 @@ When discussing the curriculum in the portfolio, frame it like this:
 
 This makes the project look focused and honest. It shows that the learning is guided by engineering outputs, not vague completionism.
 
+For Chapter 3 vector work, use `docs/chapter-3-vector-simulator-seeds.md` as the first concrete set of simulator candidates.
+
 ## Assumptions and Sources
 
 Assumptions:
