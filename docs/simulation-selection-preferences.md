@@ -124,9 +124,30 @@ Good implementations should keep:
 
 - simulation logic independent from ImGui widgets
 - rendering code separate from physics kernels
+- simulator modules as the compatibility boundary between a model and its paired renderer
+- simulator arcs split into named stages, with each completed stage preserved before moving on
 - CPU reference paths before GPU optimization
 - debug UI rich enough to inspect state, parameters, and errors
 - GPU paths motivated by profiling or clear parallel structure
+
+Architecturally, prefer the Granny Sandbox 3 pattern adapted for this broader physics sandbox:
+
+- `ISimulator` owns model state, update behavior, and simulator-specific ImGui controls.
+- `ISimulatorRenderer` owns D3D12 graphics resources, pipeline state, shaders, draw commands, and renderer-specific ImGui controls.
+- `SimulatorModule` pairs one simulator with one renderer.
+
+Do not add a renderer selector by default. Multiple simulators may reuse the same renderer class, but a single simulator module should have one paired renderer unless the user explicitly asks for selectable visual modes.
+
+Do not assume every renderer should work with every simulator. A 2D vector-grid lab, a scalar-field wave lab, and a full 3D orbit lab may each need different renderer classes.
+
+The first Local Frame Lab should be built as a 3D simulator with 2D training wheels:
+
+1. XY plane interaction inside a visible 3D lattice.
+2. XY/XZ/YZ plane slices.
+3. Free 3D vector placement.
+4. Rotated local 3D frame with changing components.
+
+Preserve each stage with its own lesson trail and, when implementation changes are substantial, a code snapshot or build target.
 
 ## Portfolio Lens
 

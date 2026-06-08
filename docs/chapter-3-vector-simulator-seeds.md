@@ -25,16 +25,16 @@ This becomes the first local-frame and coordinate-transform instrument. It suppo
 
 Interactive controls:
 
-- Drag a point in the 2D plane.
-- Rotate the local coordinate axes with an ImGui angle slider.
-- Toggle between 2D rotated-frame mode and 3D box-vector mode.
+- Select or drag a point/vector in a 3D lattice.
+- Start constrained to the XY plane, then unlock XZ, YZ, and free 3D modes.
+- Rotate the local coordinate axes with ImGui yaw/pitch/roll controls.
 - Adjust 3D box dimensions `a`, `b`, and `c`.
 - Toggle world basis, local basis, and projected components.
 
 Live outputs:
 
-- World coordinates `(x, y)` and local coordinates `(x', y')`.
-- Rotation matrix.
+- World coordinates `(x, y, z)` and local coordinates `(x', y', z')`.
+- Rotation matrix or local basis vectors.
 - Component arrows on each basis axis.
 - 3D face diagonal and body diagonal magnitudes.
 - Axis-angle readouts for the 3D vector mode.
@@ -46,6 +46,13 @@ The point/vector does not physically move when the coordinate frame rotates. Onl
 Extension:
 
 Later this can grow into local tangent frames, camera/view transforms, tensor component visualization, and metric-aware coordinate displays.
+
+Stage plan:
+
+1. **XY Plane In A 3D World**: 3D lattice, world axes, interaction locked to XY, one selected vector, basic coordinate and magnitude readouts.
+2. **Plane Slices**: add XY/XZ/YZ plane locks and projection shadows so 2D problems feel like slices through 3D.
+3. **Free 3D Vector**: unlock full 3D placement, add depth guides, component legs, face diagonals, and body diagonal intuition.
+4. **Rotated Local 3D Frame**: add local basis vectors `i'`, `j'`, `k'`, rotation controls, local components, and optional animated basis rotation.
 
 ## 2. Motion State Lab
 

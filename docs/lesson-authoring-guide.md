@@ -204,33 +204,53 @@ When a simulator arc grows beyond a few lessons, add a catalog file that lists l
 
 The catalog is useful for humans and agents. It prevents lessons from becoming a pile of unrelated notes.
 
+## Stage Preservation Pattern
+
+Build simulator arcs in named stages and preserve each stage before moving on.
+
+For every stage:
+
+- create or update a lesson document for that exact stage
+- keep the completed stage buildable before starting the next one
+- do not overwrite earlier stage explanations when later stages become more advanced
+- preserve important code snapshots when a later stage will substantially reshape the implementation
+- record what the stage teaches, what controls exist, what visual output changed, and what reusable primitive was created
+
+This project is a learning portfolio. The path matters, not just the final app.
+
 ## Applying This To The First Simulator
 
 The first simulator under discussion is the **Local Frame Lab** from `docs/chapter-3-vector-simulator-seeds.md`.
 
-The first lessons should not try to build the full 2D + 3D lab at once. Use this arc:
+The canonical stage catalog is `docs/local-frame-lab-stage-catalog.md`.
 
-1. **Lesson 01: A Vector Is Not Its Coordinates**
-   - Fixed world axes
-   - One draggable vector `P`
-   - Readout for `(x, y)`
+The first lessons should make the simulator 3D from the beginning, but with 2D training wheels. Use this four-stage arc:
+
+1. **Stage 1: XY Plane In A 3D World**
+   - 3D lattice visible, but interaction constrained to the XY plane
+   - World X/Y/Z axes visible
+   - One selected point/vector `P`
+   - Readouts for `(x, y, z)` and magnitude
    - Main idea: the arrow is the object; coordinates are its description
 
-2. **Lesson 02: Rotating The Measuring Sticks**
-   - Add rotated `x'` and `y'` axes
-   - Add angle slider
+2. **Stage 2: Plane Slices**
+   - Add XY, XZ, and YZ plane-lock modes
+   - Keep interaction simple while making the third dimension real
+   - Draw projection shadows on the active plane
+   - Main idea: 2D vector problems are constrained slices of a 3D space
+
+3. **Stage 3: Free 3D Vector**
+   - Unlock full 3D point/vector placement
+   - Add camera/orbit controls if needed
+   - Show depth guides, component legs, face diagonals, and body diagonal intuition
+   - Main idea: magnitude and components generalize naturally to 3D
+
+4. **Stage 4: Rotated Local 3D Frame**
+   - Add local basis vectors `i'`, `j'`, and `k'`
+   - Add yaw/pitch/roll or equivalent rotation controls
    - Keep `P` fixed while local coordinates change
+   - Show component projections onto the rotated local frame
    - Main idea: same vector, different frame
-
-3. **Lesson 03: Projection Onto A Frame**
-   - Draw component projections onto `x'` and `y'`
-   - Show the formula for `(x', y')`
-   - Main idea: components are shadows of the vector on chosen basis directions
-
-4. **Lesson 04: From 2D Frames To 3D Components**
-   - Add simple 3D vector/box mode from Problems 55 and 61
-   - Show face diagonal and body diagonal
-   - Main idea: magnitude generalizes from 2D to 3D
 
 This keeps the first simulator teachable. It also follows the project preference: graphics and animation stay fun, while broad chapter coverage serves the sandbox instead of taking over.
 

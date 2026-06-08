@@ -9,17 +9,25 @@ const char* EmptySimulator::name() const noexcept
     return "Empty Simulator";
 }
 
+void EmptySimulator::update(const SimulationTick& tick)
+{
+    elapsed_seconds_ = tick.total_seconds;
+    frame_count_ = tick.frame_number;
+}
+
 void EmptySimulator::render_ui(const SimulatorFrameContext& context)
 {
     ImGui::SetNextWindowPos(ImVec2(24.0f, 24.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(430.0f, 180.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(470.0f, 210.0f), ImGuiCond_FirstUseEver);
 
     ImGui::Begin(name());
     ImGui::TextUnformatted("Step 01: resizable Win32 + D3D12 + ImGui.");
-    ImGui::TextUnformatted("Step 02: simulator-owned ImGui panel.");
+    ImGui::TextUnformatted("Step 02: simulator module + renderer pair.");
     ImGui::Separator();
     ImGui::Text("Client area: %u x %u", context.client_width, context.client_height);
     ImGui::Text("Frame index: %u", context.frame_index);
+    ImGui::Text("Simulation frame: %llu", frame_count_);
+    ImGui::Text("Elapsed: %.2f seconds", elapsed_seconds_);
     ImGui::Text(
         "ImGui DisplaySize: %.0f x %.0f",
         context.imgui_display_width,

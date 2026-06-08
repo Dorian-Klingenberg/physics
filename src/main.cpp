@@ -8,13 +8,14 @@
 #include <wrl/client.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
-#include <memory>
 #include <stdexcept>
 #include <string>
 
-#include "sim/empty_simulator.h"
-#include "sim/i_simulator.h"
+#include "app/default_simulator_module.h"
+#include "gfx/i_simulator_renderer.h"
+#include "sim/simulation_tick.h"
 #include "third_party/imgui/imgui.h"
 #include "third_party/imgui/backends/imgui_impl_dx12.h"
 #include "third_party/imgui/backends/imgui_impl_win32.h"
@@ -50,14 +51,10 @@ Application* g_app = nullptr;
 
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
 
-std::unique_ptr<physics::sim::ISimulator> create_simulator()
-{
-    // Swap this implementation when you want to plug in a different simulator.
-    return std::make_unique<physics::sim::EmptySimulator>();
-}
-
 struct Application
 {
+    using Clock = std::chrono::steady_clock;
+
     HWND hwnd = nullptr;
     UINT width = 1280;
     UINT height = 720;
@@ -81,10 +78,15 @@ struct Application
     HANDLE fence_event = nullptr;
     UINT64 next_fence_value = 1;
     UINT frame_index = 0;
-    std::unique_ptr<physics::sim::ISimulator> simulator;
+    physics::app::SimulatorModule simulator_module;
+    Clock::time_point start_time;
+    Clock::time_point previous_frame_time;
+    std::uint64_t simulation_frame_number = 0;
 
     Application()
-        : simulator(create_simulator())
+        : simulator_module(physics::app::create_default_simulator_module()),
+          start_time(Clock::now()),
+          previous_frame_time(start_time)
     {
         g_app = this;
     }
@@ -243,6 +245,19 @@ struct Application
         d3d_ready = true;
     }
 
+    void initialize_simulator_renderer()
+    {
+        const physics::gfx::RendererInitContext context{
+            device.Get(),
+            k_back_buffer_format,
+            k_frame_count,
+            width,
+            height,
+        };
+
+        simulator_module.active_renderer().initialize(context);
+    }
+
     void initialize_imgui()
     {
         IMGUI_CHECKVERSION();
@@ -346,6 +361,9 @@ struct Application
 
         frame_index = swap_chain->GetCurrentBackBufferIndex();
         create_render_target_views();
+
+        const physics::gfx::RendererResizeContext resize_context{width, height};
+        simulator_module.active_renderer().on_resize(resize_context);
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE current_rtv_handle() const
@@ -410,6 +428,35 @@ struct Application
         frame_index = swap_chain->GetCurrentBackBufferIndex();
     }
 
+    physics::sim::SimulationTick create_simulation_tick()
+    {
+        const Clock::time_point now = Clock::now();
+        const float delta_seconds =
+            std::chrono::duration<float>(now - previous_frame_time).count();
+        const float total_seconds =
+            std::chrono::duration<float>(now - start_time).count();
+        previous_frame_time = now;
+
+        return physics::sim::SimulationTick{
+            delta_seconds,
+            total_seconds,
+            simulation_frame_number++,
+        };
+    }
+
+    void record_simulator_scene()
+    {
+        const physics::gfx::RendererFrameContext context{
+            command_list.Get(),
+            current_rtv_handle(),
+            frame_index,
+            width,
+            height,
+        };
+
+        simulator_module.active_renderer().record_draw(context);
+    }
+
     void draw_simulator_ui()
     {
         const ImGuiIO& io = ImGui::GetIO();
@@ -420,22 +467,37 @@ struct Application
             io.DisplaySize.x,
             io.DisplaySize.y,
         };
-        simulator->render_ui(context);
+        simulator_module.active_simulator().render_ui(context);
+    }
+
+    void draw_renderer_ui()
+    {
+        ImGui::SetNextWindowPos(ImVec2(24.0f, 250.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(360.0f, 125.0f), ImGuiCond_FirstUseEver);
+
+        ImGui::Begin("Renderer");
+        ImGui::Text("Paired renderer: %s", simulator_module.active_renderer().name());
+        ImGui::Separator();
+        simulator_module.active_renderer().render_ui();
+        ImGui::End();
     }
 
     void render()
     {
         constexpr float clear_color[4] = {0.06f, 0.07f, 0.09f, 1.0f};
+        simulator_module.active_simulator().update(create_simulation_tick());
 
         begin_frame();
 
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = current_rtv_handle();
         command_list->ClearRenderTargetView(rtv_handle, clear_color, 0, nullptr);
+        record_simulator_scene();
 
         ImGui_ImplDX12_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
         draw_simulator_ui();
+        draw_renderer_ui();
         ImGui::Render();
 
         ID3D12DescriptorHeap* heaps[] = {imgui_srv_heap.Get()};
@@ -519,6 +581,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
         Application app;
         app.create_window();
         app.initialize_d3d12();
+        app.initialize_simulator_renderer();
         app.initialize_imgui();
         app.run();
         return 0;

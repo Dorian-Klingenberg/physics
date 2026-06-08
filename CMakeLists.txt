@@ -4,7 +4,11 @@ project(physics_sandbox LANGUAGES CXX)
 
 add_executable(physics_sandbox WIN32
     src/main.cpp
+    src/app/default_simulator_module.cpp
+    src/gfx/empty_renderer.cpp
+    src/gfx/local_frame_grid_renderer.cpp
     src/sim/empty_simulator.cpp
+    src/sim/local_frame_simulator.cpp
     third_party/imgui/imgui.cpp
     third_party/imgui/imgui_draw.cpp
     third_party/imgui/imgui_tables.cpp
@@ -28,6 +32,7 @@ endif()
 
 target_link_libraries(physics_sandbox PRIVATE
     d3d12
+    d3dcompiler
     dxgi
     dwmapi
 )
