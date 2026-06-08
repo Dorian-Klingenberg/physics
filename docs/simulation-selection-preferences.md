@@ -108,6 +108,8 @@ Each small simulator should aim for:
 
 Do not overbuild the first version. The first version should be small, correct, and inspectable.
 
+Lessons for these simulators should follow `docs/lesson-authoring-guide.md`. Build them as small why-first chapters with diagrams, visible controls, live readouts, and explicit "what we learned" recaps.
+
 ## Preferred Implementation Stack
 
 When building interactive simulators for this project, prefer:

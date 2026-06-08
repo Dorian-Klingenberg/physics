@@ -5,6 +5,7 @@
 These are the first small simulator candidates derived from the Chapter 3 additional vector problems in Serway/Beichner. They are not one-to-one homework solutions. Each seed combines one or more questions into a reusable interactive instrument for the larger physics sandbox.
 
 Selection follows `docs/simulation-selection-preferences.md`: prefer visual, animated, reusable, project-aligned simulators over isolated numeric answers.
+Lesson writing follows `docs/lesson-authoring-guide.md`: build each simulator in small why-first chapters with diagrams, live controls, and clear recaps.
 
 ## 1. Local Frame Lab
 
