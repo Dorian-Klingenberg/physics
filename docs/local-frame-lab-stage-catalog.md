@@ -39,6 +39,10 @@ Reusable primitive:
 
 ## Stage 2: Plane Slices
 
+Lesson:
+
+- `docs/lesson-05-local-frame-stage-02-plane-slices.md`
+
 Core idea:
 
 2D vector problems are constrained slices through 3D space.

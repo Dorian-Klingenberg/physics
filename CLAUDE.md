@@ -11,5 +11,6 @@ Short version:
 - Use `ISimulator` for model/update/simulator UI.
 - Use `ISimulatorRenderer` for D3D12 renderer resources and draw calls.
 - Use `SimulatorModule` to pair one simulator with one renderer.
+- Do not add a renderer selector by default; reuse renderer classes across modules instead.
 - Preserve simulator work in named stages with lesson docs.
 - Build the Local Frame Lab from `docs/local-frame-lab-stage-catalog.md`: XY plane in 3D, plane slices, free 3D vector, rotated local 3D frame.

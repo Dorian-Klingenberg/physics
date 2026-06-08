@@ -122,6 +122,83 @@ D3D12_RESOURCE_DESC buffer_desc(const unsigned long long byte_count)
     desc.Flags = D3D12_RESOURCE_FLAG_NONE;
     return desc;
 }
+
+const char* plane_name(const sim::LocalFramePlane plane)
+{
+    switch (plane)
+    {
+    case sim::LocalFramePlane::XY:
+        return "XY";
+    case sim::LocalFramePlane::XZ:
+        return "XZ";
+    case sim::LocalFramePlane::YZ:
+        return "YZ";
+    default:
+        return "Unknown";
+    }
+}
+
+DirectX::XMFLOAT3 point_on_plane(
+    const sim::LocalFramePlane plane,
+    const float first,
+    const float second,
+    const float locked)
+{
+    switch (plane)
+    {
+    case sim::LocalFramePlane::XY:
+        return {first, second, locked};
+    case sim::LocalFramePlane::XZ:
+        return {first, locked, second};
+    case sim::LocalFramePlane::YZ:
+        return {locked, first, second};
+    default:
+        return {};
+    }
+}
+
+float first_component(const DirectX::XMFLOAT3& point, const sim::LocalFramePlane plane)
+{
+    switch (plane)
+    {
+    case sim::LocalFramePlane::XY:
+    case sim::LocalFramePlane::XZ:
+        return point.x;
+    case sim::LocalFramePlane::YZ:
+        return point.y;
+    default:
+        return 0.0f;
+    }
+}
+
+float second_component(const DirectX::XMFLOAT3& point, const sim::LocalFramePlane plane)
+{
+    switch (plane)
+    {
+    case sim::LocalFramePlane::XY:
+        return point.y;
+    case sim::LocalFramePlane::XZ:
+    case sim::LocalFramePlane::YZ:
+        return point.z;
+    default:
+        return 0.0f;
+    }
+}
+
+float locked_component(const DirectX::XMFLOAT3& point, const sim::LocalFramePlane plane)
+{
+    switch (plane)
+    {
+    case sim::LocalFramePlane::XY:
+        return point.z;
+    case sim::LocalFramePlane::XZ:
+        return point.y;
+    case sim::LocalFramePlane::YZ:
+        return point.x;
+    default:
+        return 0.0f;
+    }
+}
 } // namespace
 
 LocalFrameGridRenderer::LocalFrameGridRenderer(std::shared_ptr<sim::LocalFrameState> state)
@@ -148,7 +225,7 @@ LocalFrameGridRenderer::~LocalFrameGridRenderer()
 
 const char* LocalFrameGridRenderer::name() const noexcept
 {
-    return "Stage 1: 3D Grid Lines";
+    return "Stage 2: Plane Slice Grid";
 }
 
 void LocalFrameGridRenderer::initialize(const RendererInitContext& context)
@@ -214,7 +291,7 @@ void LocalFrameGridRenderer::record_draw(const RendererFrameContext& context)
 
 void LocalFrameGridRenderer::render_ui()
 {
-    ImGui::TextUnformatted("Line renderer: lattice, axes, P, and component legs.");
+    ImGui::Text("Line renderer: active %s plane slice.", plane_name(state_->active_plane));
     ImGui::Text("Viewport: %u x %u", width_, height_);
     ImGui::Text("Vertices: %zu", vertices_.size());
 }
@@ -370,24 +447,50 @@ void LocalFrameGridRenderer::update_camera(const RendererFrameContext& context)
 void LocalFrameGridRenderer::build_vertices()
 {
     vertices_.clear();
-    vertices_.reserve(192);
+    vertices_.reserve(256);
 
-    const DirectX::XMFLOAT4 grid_color = {0.20f, 0.23f, 0.27f, 1.0f};
+    const DirectX::XMFLOAT4 grid_color = {0.19f, 0.22f, 0.27f, 1.0f};
+    const DirectX::XMFLOAT4 active_plane_color = {0.36f, 0.43f, 0.52f, 1.0f};
     const DirectX::XMFLOAT4 depth_color = {0.13f, 0.16f, 0.20f, 1.0f};
     const DirectX::XMFLOAT4 x_color = {0.95f, 0.18f, 0.18f, 1.0f};
     const DirectX::XMFLOAT4 y_color = {0.22f, 0.86f, 0.35f, 1.0f};
     const DirectX::XMFLOAT4 z_color = {0.25f, 0.48f, 1.0f, 1.0f};
     const DirectX::XMFLOAT4 vector_color = {1.0f, 0.86f, 0.24f, 1.0f};
     const DirectX::XMFLOAT4 point_color = {1.0f, 1.0f, 1.0f, 1.0f};
+    const DirectX::XMFLOAT4 slice_anchor_color = {0.85f, 0.72f, 1.0f, 1.0f};
     const DirectX::XMFLOAT4 x_measure_color = {0.98f, 0.48f, 0.32f, 1.0f};
     const DirectX::XMFLOAT4 y_measure_color = {0.52f, 0.95f, 0.58f, 1.0f};
+    const float locked = locked_component(state_->point, state_->active_plane);
 
     for (int i = -6; i <= 6; ++i)
     {
         const float p = static_cast<float>(i);
-        add_line({-k_grid_extent, p, 0.0f}, {k_grid_extent, p, 0.0f}, grid_color);
-        add_line({p, -k_grid_extent, 0.0f}, {p, k_grid_extent, 0.0f}, grid_color);
+        add_line(
+            point_on_plane(state_->active_plane, -k_grid_extent, p, locked),
+            point_on_plane(state_->active_plane, k_grid_extent, p, locked),
+            grid_color);
+        add_line(
+            point_on_plane(state_->active_plane, p, -k_grid_extent, locked),
+            point_on_plane(state_->active_plane, p, k_grid_extent, locked),
+            grid_color);
     }
+
+    add_line(
+        point_on_plane(state_->active_plane, -k_grid_extent, -k_grid_extent, locked),
+        point_on_plane(state_->active_plane, k_grid_extent, -k_grid_extent, locked),
+        active_plane_color);
+    add_line(
+        point_on_plane(state_->active_plane, k_grid_extent, -k_grid_extent, locked),
+        point_on_plane(state_->active_plane, k_grid_extent, k_grid_extent, locked),
+        active_plane_color);
+    add_line(
+        point_on_plane(state_->active_plane, k_grid_extent, k_grid_extent, locked),
+        point_on_plane(state_->active_plane, -k_grid_extent, k_grid_extent, locked),
+        active_plane_color);
+    add_line(
+        point_on_plane(state_->active_plane, -k_grid_extent, k_grid_extent, locked),
+        point_on_plane(state_->active_plane, -k_grid_extent, -k_grid_extent, locked),
+        active_plane_color);
 
     if (state_->show_lattice_depth)
     {
@@ -409,12 +512,31 @@ void LocalFrameGridRenderer::build_vertices()
     add_line({0.0f, 0.0f, -k_depth_extent - 0.5f}, {0.0f, 0.0f, k_depth_extent + 0.5f}, z_color);
 
     const DirectX::XMFLOAT3 point = state_->point;
+    const DirectX::XMFLOAT3 slice_anchor =
+        point_on_plane(state_->active_plane, 0.0f, 0.0f, locked);
     if (state_->show_component_legs)
     {
-        add_line({0.0f, 0.0f, 0.0f}, {point.x, 0.0f, 0.0f}, x_color);
-        add_line({point.x, 0.0f, 0.0f}, {point.x, point.y, 0.0f}, y_measure_color);
-        add_line({0.0f, point.y, 0.0f}, {point.x, point.y, 0.0f}, x_measure_color);
+        const float first = first_component(point, state_->active_plane);
+        const float second = second_component(point, state_->active_plane);
+        const DirectX::XMFLOAT3 first_axis_point =
+            point_on_plane(state_->active_plane, first, 0.0f, locked);
+        const DirectX::XMFLOAT3 second_axis_point =
+            point_on_plane(state_->active_plane, 0.0f, second, locked);
+        add_line(slice_anchor, first_axis_point, x_color);
+        add_line(first_axis_point, point, y_measure_color);
+        add_line(second_axis_point, point, x_measure_color);
     }
+
+    constexpr float anchor_marker = 0.25f;
+    add_line(
+        point_on_plane(state_->active_plane, -anchor_marker, -anchor_marker, locked),
+        point_on_plane(state_->active_plane, anchor_marker, anchor_marker, locked),
+        slice_anchor_color);
+    add_line(
+        point_on_plane(state_->active_plane, -anchor_marker, anchor_marker, locked),
+        point_on_plane(state_->active_plane, anchor_marker, -anchor_marker, locked),
+        slice_anchor_color);
+    add_line({0.0f, 0.0f, 0.0f}, slice_anchor, slice_anchor_color);
 
     add_line({0.0f, 0.0f, 0.0f}, point, vector_color);
 

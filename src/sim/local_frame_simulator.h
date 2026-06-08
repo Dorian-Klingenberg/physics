@@ -19,9 +19,12 @@ public:
     void render_ui(const SimulatorFrameContext& context) override;
 
 private:
-    void handle_xy_plane_click();
+    void handle_plane_drag();
     void move_point_to_mouse();
     void draw_scene_labels() const;
+    void draw_active_plane_overlay() const;
+    void set_active_plane(LocalFramePlane plane);
+    void set_point_from_active_components(float first, float second);
     [[nodiscard]] bool world_to_screen(
         DirectX::XMFLOAT3 world,
         ImVec2& screen) const;

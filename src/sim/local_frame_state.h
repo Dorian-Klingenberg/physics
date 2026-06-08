@@ -4,9 +4,17 @@
 
 namespace physics::sim
 {
+enum class LocalFramePlane
+{
+    XY,
+    XZ,
+    YZ,
+};
+
 struct LocalFrameState
 {
     DirectX::XMFLOAT3 point = {3.0f, 2.0f, 0.0f};
+    LocalFramePlane active_plane = LocalFramePlane::XY;
     DirectX::XMFLOAT4X4 view_projection = {};
     DirectX::XMFLOAT4X4 inverse_view_projection = {};
     unsigned int viewport_width = 0;
