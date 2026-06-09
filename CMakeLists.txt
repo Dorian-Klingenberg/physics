@@ -6,6 +6,7 @@ add_executable(physics_sandbox WIN32
     src/main.cpp
     src/app/default_simulator_module.cpp
     src/gfx/empty_renderer.cpp
+    src/gfx/line_renderer_base.cpp
     src/gfx/local_frame_grid_renderer.cpp
     src/sim/empty_simulator.cpp
     src/sim/local_frame_simulator.cpp

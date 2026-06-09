@@ -19,8 +19,12 @@ public:
     void render_ui(const SimulatorFrameContext& context) override;
 
 private:
-    void handle_plane_drag();
+    void render_free_3d_ui(const SimulatorFrameContext& context);
+    void render_plane_slice_ui();
+    void handle_interaction();
     void move_point_to_mouse();
+    void move_point_on_drag_plane();
+    [[nodiscard]] DirectX::XMFLOAT3 compute_camera_look_dir() const;
     void draw_scene_labels() const;
     void draw_active_plane_overlay() const;
     void set_active_plane(LocalFramePlane plane);
@@ -33,5 +37,8 @@ private:
     std::shared_ptr<LocalFrameState> state_;
     float elapsed_seconds_ = 0.0f;
     bool dragging_point_ = false;
+    bool orbiting_ = false;
+    DirectX::XMFLOAT3 drag_plane_normal_ = {};
+    DirectX::XMFLOAT3 drag_plane_origin_ = {};
 };
 } // namespace physics::sim

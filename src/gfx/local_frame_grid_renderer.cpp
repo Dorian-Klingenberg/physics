@@ -1,562 +1,284 @@
 #include "gfx/local_frame_grid_renderer.h"
 
-#include <d3dcompiler.h>
-
 #include <algorithm>
-#include <cstring>
+#include <cmath>
 #include <stdexcept>
 
 #include "third_party/imgui/imgui.h"
+#include "sim/local_frame_math.h"
 
-using Microsoft::WRL::ComPtr;
+using namespace DirectX;
 
 namespace physics::gfx
 {
 namespace
 {
-constexpr unsigned int k_max_vertices = 2048;
-constexpr float k_grid_extent = 6.0f;
+constexpr float k_grid_extent  = 6.0f;
 constexpr float k_depth_extent = 4.0f;
 
-constexpr char k_shader_source[] = R"(
-cbuffer SceneConstants : register(b0)
-{
-    row_major float4x4 view_projection;
-};
-
-struct VSInput
-{
-    float3 position : POSITION;
-    float4 color : COLOR;
-};
-
-struct PSInput
-{
-    float4 position : SV_POSITION;
-    float4 color : COLOR;
-};
-
-PSInput VSMain(VSInput input)
-{
-    PSInput output;
-    output.position = mul(float4(input.position, 1.0), view_projection);
-    output.color = input.color;
-    return output;
-}
-
-float4 PSMain(PSInput input) : SV_TARGET
-{
-    return input.color;
-}
-)";
-
-void throw_if_failed(const HRESULT hr, const char* message)
-{
-    if (FAILED(hr))
-    {
-        throw std::runtime_error(message);
-    }
-}
-
-ComPtr<ID3DBlob> compile_shader(const char* entry_point, const char* target)
-{
-    UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
-#if defined(_DEBUG)
-    flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-
-    ComPtr<ID3DBlob> bytecode;
-    ComPtr<ID3DBlob> errors;
-    const HRESULT hr = D3DCompile(
-        k_shader_source,
-        std::strlen(k_shader_source),
-        nullptr,
-        nullptr,
-        nullptr,
-        entry_point,
-        target,
-        flags,
-        0,
-        &bytecode,
-        &errors);
-
-    if (FAILED(hr))
-    {
-        const char* message = errors ? static_cast<const char*>(errors->GetBufferPointer())
-                                     : "D3DCompile failed.";
-        throw std::runtime_error(message);
-    }
-
-    return bytecode;
-}
-
-unsigned int align_constant_buffer_size(const unsigned int size)
-{
-    return (size + 255u) & ~255u;
-}
-
-D3D12_HEAP_PROPERTIES upload_heap_properties()
-{
-    D3D12_HEAP_PROPERTIES properties = {};
-    properties.Type = D3D12_HEAP_TYPE_UPLOAD;
-    properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
-    properties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
-    properties.CreationNodeMask = 1;
-    properties.VisibleNodeMask = 1;
-    return properties;
-}
-
-D3D12_RESOURCE_DESC buffer_desc(const unsigned long long byte_count)
-{
-    D3D12_RESOURCE_DESC desc = {};
-    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Alignment = 0;
-    desc.Width = byte_count;
-    desc.Height = 1;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels = 1;
-    desc.Format = DXGI_FORMAT_UNKNOWN;
-    desc.SampleDesc.Count = 1;
-    desc.SampleDesc.Quality = 0;
-    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-    return desc;
-}
-
-const char* plane_name(const sim::LocalFramePlane plane)
-{
-    switch (plane)
-    {
-    case sim::LocalFramePlane::XY:
-        return "XY";
-    case sim::LocalFramePlane::XZ:
-        return "XZ";
-    case sim::LocalFramePlane::YZ:
-        return "YZ";
-    default:
-        return "Unknown";
-    }
-}
-
-DirectX::XMFLOAT3 point_on_plane(
-    const sim::LocalFramePlane plane,
-    const float first,
-    const float second,
-    const float locked)
-{
-    switch (plane)
-    {
-    case sim::LocalFramePlane::XY:
-        return {first, second, locked};
-    case sim::LocalFramePlane::XZ:
-        return {first, locked, second};
-    case sim::LocalFramePlane::YZ:
-        return {locked, first, second};
-    default:
-        return {};
-    }
-}
-
-float first_component(const DirectX::XMFLOAT3& point, const sim::LocalFramePlane plane)
-{
-    switch (plane)
-    {
-    case sim::LocalFramePlane::XY:
-    case sim::LocalFramePlane::XZ:
-        return point.x;
-    case sim::LocalFramePlane::YZ:
-        return point.y;
-    default:
-        return 0.0f;
-    }
-}
-
-float second_component(const DirectX::XMFLOAT3& point, const sim::LocalFramePlane plane)
-{
-    switch (plane)
-    {
-    case sim::LocalFramePlane::XY:
-        return point.y;
-    case sim::LocalFramePlane::XZ:
-    case sim::LocalFramePlane::YZ:
-        return point.z;
-    default:
-        return 0.0f;
-    }
-}
-
-float locked_component(const DirectX::XMFLOAT3& point, const sim::LocalFramePlane plane)
-{
-    switch (plane)
-    {
-    case sim::LocalFramePlane::XY:
-        return point.z;
-    case sim::LocalFramePlane::XZ:
-        return point.y;
-    case sim::LocalFramePlane::YZ:
-        return point.x;
-    default:
-        return 0.0f;
-    }
-}
+// ── Color palette ────────────────────────────────────────────────────────────
+const XMFLOAT4 k_grid          = {0.19f, 0.22f, 0.27f, 1.0f};
+const XMFLOAT4 k_active_plane  = {0.36f, 0.43f, 0.52f, 1.0f};
+const XMFLOAT4 k_depth         = {0.13f, 0.16f, 0.20f, 1.0f};
+const XMFLOAT4 k_x             = {0.95f, 0.18f, 0.18f, 1.0f};
+const XMFLOAT4 k_y             = {0.22f, 0.86f, 0.35f, 1.0f};
+const XMFLOAT4 k_z             = {0.25f, 0.48f, 1.0f,  1.0f};
+const XMFLOAT4 k_vector        = {1.0f,  0.86f, 0.24f, 1.0f};
+const XMFLOAT4 k_point         = {1.0f,  1.0f,  1.0f,  1.0f};
+const XMFLOAT4 k_box           = {0.28f, 0.32f, 0.38f, 0.85f};
+const XMFLOAT4 k_face_diag_xy  = {0.90f, 0.85f, 0.30f, 0.80f};
+const XMFLOAT4 k_face_diag_xz  = {0.90f, 0.50f, 0.20f, 0.80f};
+const XMFLOAT4 k_face_diag_yz  = {0.25f, 0.80f, 0.85f, 0.80f};
+const XMFLOAT4 k_theta_arc     = {0.78f, 0.65f, 1.0f,  0.90f};
+const XMFLOAT4 k_slice_anchor  = {0.85f, 0.72f, 1.0f,  1.0f};
+const XMFLOAT4 k_x_measure     = {0.98f, 0.48f, 0.32f, 1.0f};
+const XMFLOAT4 k_y_measure     = {0.52f, 0.95f, 0.58f, 1.0f};
 } // namespace
 
+// ── Construction ─────────────────────────────────────────────────────────────
+
 LocalFrameGridRenderer::LocalFrameGridRenderer(std::shared_ptr<sim::LocalFrameState> state)
-    : state_(std::move(state))
+    : LineRendererBase(4096), state_(std::move(state))
 {
     if (!state_)
-    {
         throw std::invalid_argument("LocalFrameGridRenderer requires shared state.");
-    }
-}
-
-LocalFrameGridRenderer::~LocalFrameGridRenderer()
-{
-    if (vertex_buffer_)
-    {
-        vertex_buffer_->Unmap(0, nullptr);
-    }
-
-    if (constant_buffer_)
-    {
-        constant_buffer_->Unmap(0, nullptr);
-    }
 }
 
 const char* LocalFrameGridRenderer::name() const noexcept
 {
-    return "Stage 2: Plane Slice Grid";
-}
-
-void LocalFrameGridRenderer::initialize(const RendererInitContext& context)
-{
-    width_ = context.initial_width;
-    height_ = context.initial_height;
-    build_pipeline(context);
-    create_upload_buffers(context.device);
-}
-
-void LocalFrameGridRenderer::on_resize(const RendererResizeContext& context)
-{
-    width_ = context.width;
-    height_ = context.height;
-}
-
-void LocalFrameGridRenderer::record_draw(const RendererFrameContext& context)
-{
-    if (!pipeline_state_ || !root_signature_ || !mapped_vertices_ || !mapped_constants_)
-    {
-        return;
-    }
-
-    width_ = context.width;
-    height_ = context.height;
-    update_camera(context);
-    build_vertices();
-
-    if (vertices_.empty())
-    {
-        return;
-    }
-
-    const std::size_t vertex_count = std::min<std::size_t>(vertices_.size(), k_max_vertices);
-    std::memcpy(mapped_vertices_, vertices_.data(), vertex_count * sizeof(Vertex));
-
-    context.command_list->SetGraphicsRootSignature(root_signature_.Get());
-    context.command_list->SetPipelineState(pipeline_state_.Get());
-
-    D3D12_VIEWPORT viewport = {};
-    viewport.TopLeftX = 0.0f;
-    viewport.TopLeftY = 0.0f;
-    viewport.Width = static_cast<float>(context.width);
-    viewport.Height = static_cast<float>(context.height);
-    viewport.MinDepth = 0.0f;
-    viewport.MaxDepth = 1.0f;
-
-    D3D12_RECT scissor = {};
-    scissor.left = 0;
-    scissor.top = 0;
-    scissor.right = static_cast<LONG>(context.width);
-    scissor.bottom = static_cast<LONG>(context.height);
-
-    context.command_list->RSSetViewports(1, &viewport);
-    context.command_list->RSSetScissorRects(1, &scissor);
-    context.command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-    context.command_list->IASetVertexBuffers(0, 1, &vertex_buffer_view_);
-    context.command_list->SetGraphicsRootConstantBufferView(
-        0,
-        constant_buffer_->GetGPUVirtualAddress());
-    context.command_list->DrawInstanced(static_cast<UINT>(vertex_count), 1, 0, 0);
+    return "Stage 3: Free 3D Vector Grid";
 }
 
 void LocalFrameGridRenderer::render_ui()
 {
-    ImGui::Text("Line renderer: active %s plane slice.", plane_name(state_->active_plane));
+    using sim::plane_name;
+    ImGui::Text(
+        "Line renderer: %s",
+        state_->free_3d_mode ? "free 3D" : sim::plane_info(state_->active_plane).name);
     ImGui::Text("Viewport: %u x %u", width_, height_);
     ImGui::Text("Vertices: %zu", vertices_.size());
 }
 
-void LocalFrameGridRenderer::build_pipeline(const RendererInitContext& context)
-{
-    D3D12_ROOT_PARAMETER root_parameter = {};
-    root_parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-    root_parameter.Descriptor.ShaderRegister = 0;
-    root_parameter.Descriptor.RegisterSpace = 0;
-    root_parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-
-    D3D12_ROOT_SIGNATURE_DESC root_signature_desc = {};
-    root_signature_desc.NumParameters = 1;
-    root_signature_desc.pParameters = &root_parameter;
-    root_signature_desc.NumStaticSamplers = 0;
-    root_signature_desc.pStaticSamplers = nullptr;
-    root_signature_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-
-    ComPtr<ID3DBlob> signature;
-    ComPtr<ID3DBlob> errors;
-    throw_if_failed(
-        D3D12SerializeRootSignature(
-            &root_signature_desc,
-            D3D_ROOT_SIGNATURE_VERSION_1,
-            &signature,
-            &errors),
-        errors ? static_cast<const char*>(errors->GetBufferPointer())
-               : "D3D12SerializeRootSignature failed.");
-
-    throw_if_failed(
-        context.device->CreateRootSignature(
-            0,
-            signature->GetBufferPointer(),
-            signature->GetBufferSize(),
-            IID_PPV_ARGS(&root_signature_)),
-        "CreateRootSignature failed.");
-
-    const ComPtr<ID3DBlob> vertex_shader = compile_shader("VSMain", "vs_5_0");
-    const ComPtr<ID3DBlob> pixel_shader = compile_shader("PSMain", "ps_5_0");
-
-    D3D12_INPUT_ELEMENT_DESC input_elements[] = {
-        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
-         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12,
-         D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-    };
-
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC pso_desc = {};
-    pso_desc.pRootSignature = root_signature_.Get();
-    pso_desc.VS = {vertex_shader->GetBufferPointer(), vertex_shader->GetBufferSize()};
-    pso_desc.PS = {pixel_shader->GetBufferPointer(), pixel_shader->GetBufferSize()};
-    pso_desc.BlendState.AlphaToCoverageEnable = FALSE;
-    pso_desc.BlendState.IndependentBlendEnable = FALSE;
-    pso_desc.BlendState.RenderTarget[0].BlendEnable = FALSE;
-    pso_desc.BlendState.RenderTarget[0].LogicOpEnable = FALSE;
-    pso_desc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
-    pso_desc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_ZERO;
-    pso_desc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-    pso_desc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
-    pso_desc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
-    pso_desc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-    pso_desc.BlendState.RenderTarget[0].LogicOp = D3D12_LOGIC_OP_NOOP;
-    pso_desc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    pso_desc.SampleMask = UINT_MAX;
-    pso_desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-    pso_desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-    pso_desc.RasterizerState.FrontCounterClockwise = FALSE;
-    pso_desc.RasterizerState.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
-    pso_desc.RasterizerState.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
-    pso_desc.RasterizerState.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
-    pso_desc.RasterizerState.DepthClipEnable = TRUE;
-    pso_desc.RasterizerState.MultisampleEnable = FALSE;
-    pso_desc.RasterizerState.AntialiasedLineEnable = TRUE;
-    pso_desc.RasterizerState.ForcedSampleCount = 0;
-    pso_desc.RasterizerState.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
-    pso_desc.DepthStencilState.DepthEnable = FALSE;
-    pso_desc.DepthStencilState.StencilEnable = FALSE;
-    pso_desc.InputLayout = {input_elements, 2};
-    pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
-    pso_desc.NumRenderTargets = 1;
-    pso_desc.RTVFormats[0] = context.back_buffer_format;
-    pso_desc.SampleDesc.Count = 1;
-
-    throw_if_failed(
-        context.device->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&pipeline_state_)),
-        "CreateGraphicsPipelineState failed.");
-}
-
-void LocalFrameGridRenderer::create_upload_buffers(ID3D12Device* device)
-{
-    const D3D12_HEAP_PROPERTIES heap_properties = upload_heap_properties();
-    const D3D12_RESOURCE_DESC vertex_desc = buffer_desc(k_max_vertices * sizeof(Vertex));
-    throw_if_failed(
-        device->CreateCommittedResource(
-            &heap_properties,
-            D3D12_HEAP_FLAG_NONE,
-            &vertex_desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr,
-            IID_PPV_ARGS(&vertex_buffer_)),
-        "CreateCommittedResource vertex buffer failed.");
-
-    D3D12_RANGE no_read = {};
-    throw_if_failed(vertex_buffer_->Map(0, &no_read, reinterpret_cast<void**>(&mapped_vertices_)),
-                    "Vertex buffer Map failed.");
-
-    vertex_buffer_view_.BufferLocation = vertex_buffer_->GetGPUVirtualAddress();
-    vertex_buffer_view_.SizeInBytes = k_max_vertices * sizeof(Vertex);
-    vertex_buffer_view_.StrideInBytes = sizeof(Vertex);
-
-    const unsigned int constant_buffer_size =
-        align_constant_buffer_size(static_cast<unsigned int>(sizeof(SceneConstants)));
-    const D3D12_RESOURCE_DESC constant_desc = buffer_desc(constant_buffer_size);
-    throw_if_failed(
-        device->CreateCommittedResource(
-            &heap_properties,
-            D3D12_HEAP_FLAG_NONE,
-            &constant_desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr,
-            IID_PPV_ARGS(&constant_buffer_)),
-        "CreateCommittedResource constant buffer failed.");
-
-    throw_if_failed(
-        constant_buffer_->Map(0, &no_read, reinterpret_cast<void**>(&mapped_constants_)),
-        "Constant buffer Map failed.");
-}
+// ── Camera ───────────────────────────────────────────────────────────────────
 
 void LocalFrameGridRenderer::update_camera(const RendererFrameContext& context)
 {
-    using namespace DirectX;
-
     const float aspect = context.height == 0
         ? 1.0f
         : static_cast<float>(context.width) / static_cast<float>(context.height);
-    const XMVECTOR eye = XMVectorSet(7.5f, -9.0f, 6.5f, 1.0f);
+
     const XMVECTOR target = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
-    const XMVECTOR up = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
-    const XMMATRIX view = XMMatrixLookAtLH(eye, target, up);
-    const XMMATRIX projection = XMMatrixOrthographicLH(13.5f * aspect, 13.5f, 0.1f, 100.0f);
-    const XMMATRIX view_projection = XMMatrixMultiply(view, projection);
-    const XMMATRIX inverse_view_projection = XMMatrixInverse(nullptr, view_projection);
+    const XMVECTOR up     = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+
+    XMMATRIX view_projection;
+    if (state_->free_3d_mode)
+    {
+        const float cp   = std::cos(state_->camera_pitch);
+        const float dist = state_->camera_distance;
+        const XMVECTOR eye = XMVectorSet(
+            dist * cp * std::sin(state_->camera_yaw),
+            dist * cp * (-std::cos(state_->camera_yaw)),
+            dist * std::sin(state_->camera_pitch),
+            1.0f);
+        const XMMATRIX view       = XMMatrixLookAtLH(eye, target, up);
+        const XMMATRIX projection = XMMatrixPerspectiveFovLH(0.75f, aspect, 0.5f, 200.0f);
+        view_projection = XMMatrixMultiply(view, projection);
+
+        // Extract the camera's right and up axes directly from the view matrix columns.
+        // XMMatrixLookAtLH stores xaxis in column 0 and yaxis in column 1 (row-major layout),
+        // so each axis is scattered across rows: right = (_11,_21,_31), up = (_12,_22,_32).
+        XMFLOAT4X4 view_mat;
+        XMStoreFloat4x4(&view_mat, view);
+        state_->drag_plane_right = {view_mat._11, view_mat._21, view_mat._31};
+        state_->drag_plane_up    = {view_mat._12, view_mat._22, view_mat._32};
+    }
+    else
+    {
+        const XMVECTOR eye        = XMVectorSet(7.5f, -9.0f, 6.5f, 1.0f);
+        const XMMATRIX view       = XMMatrixLookAtLH(eye, target, up);
+        const XMMATRIX projection = XMMatrixOrthographicLH(13.5f * aspect, 13.5f, 0.1f, 100.0f);
+        view_projection = XMMatrixMultiply(view, projection);
+    }
+
+    const XMMATRIX inv = XMMatrixInverse(nullptr, view_projection);
 
     XMStoreFloat4x4(&mapped_constants_->view_projection, view_projection);
     XMStoreFloat4x4(&state_->view_projection, view_projection);
-    XMStoreFloat4x4(&state_->inverse_view_projection, inverse_view_projection);
-    state_->viewport_width = context.width;
+    XMStoreFloat4x4(&state_->inverse_view_projection, inv);
+    state_->viewport_width  = context.width;
     state_->viewport_height = context.height;
-    state_->picking_ready = true;
+    state_->picking_ready   = true;
 }
+
+// ── Geometry ─────────────────────────────────────────────────────────────────
 
 void LocalFrameGridRenderer::build_vertices()
 {
     vertices_.clear();
-    vertices_.reserve(256);
+    vertices_.reserve(512);
 
-    const DirectX::XMFLOAT4 grid_color = {0.19f, 0.22f, 0.27f, 1.0f};
-    const DirectX::XMFLOAT4 active_plane_color = {0.36f, 0.43f, 0.52f, 1.0f};
-    const DirectX::XMFLOAT4 depth_color = {0.13f, 0.16f, 0.20f, 1.0f};
-    const DirectX::XMFLOAT4 x_color = {0.95f, 0.18f, 0.18f, 1.0f};
-    const DirectX::XMFLOAT4 y_color = {0.22f, 0.86f, 0.35f, 1.0f};
-    const DirectX::XMFLOAT4 z_color = {0.25f, 0.48f, 1.0f, 1.0f};
-    const DirectX::XMFLOAT4 vector_color = {1.0f, 0.86f, 0.24f, 1.0f};
-    const DirectX::XMFLOAT4 point_color = {1.0f, 1.0f, 1.0f, 1.0f};
-    const DirectX::XMFLOAT4 slice_anchor_color = {0.85f, 0.72f, 1.0f, 1.0f};
-    const DirectX::XMFLOAT4 x_measure_color = {0.98f, 0.48f, 0.32f, 1.0f};
-    const DirectX::XMFLOAT4 y_measure_color = {0.52f, 0.95f, 0.58f, 1.0f};
+    if (state_->free_3d_mode)
+        build_free_3d_vertices();
+    else
+        build_plane_slice_vertices();
+}
+
+void LocalFrameGridRenderer::build_free_3d_vertices()
+{
+    // Ground grid (z = 0, XY plane)
+    for (int i = -6; i <= 6; ++i)
+    {
+        const float p = static_cast<float>(i);
+        add_line({-k_grid_extent, p, 0.0f}, {k_grid_extent, p, 0.0f}, k_grid);
+        add_line({p, -k_grid_extent, 0.0f}, {p, k_grid_extent, 0.0f}, k_grid);
+    }
+
+    // World axes
+    add_line({-k_grid_extent - 0.5f, 0.0f, 0.0f}, {k_grid_extent + 0.5f, 0.0f, 0.0f}, k_x);
+    add_line({0.0f, -k_grid_extent - 0.5f, 0.0f}, {0.0f, k_grid_extent + 0.5f, 0.0f}, k_y);
+    add_line({0.0f, 0.0f, -k_depth_extent - 0.5f}, {0.0f, 0.0f, k_depth_extent + 0.5f}, k_z);
+
+    const float px = state_->point.x;
+    const float py = state_->point.y;
+    const float pz = state_->point.z;
+
+    // Box: 9 non-staircase edges
+    if (state_->show_box)
+    {
+        add_line({0.0f, 0.0f, 0.0f}, {0.0f, py,   0.0f}, k_box); // bottom face
+        add_line({px,   py,   0.0f}, {0.0f, py,   0.0f}, k_box);
+        add_line({0.0f, 0.0f, pz  }, {px,   0.0f, pz  }, k_box); // top face
+        add_line({px,   0.0f, pz  }, {px,   py,   pz  }, k_box);
+        add_line({px,   py,   pz  }, {0.0f, py,   pz  }, k_box);
+        add_line({0.0f, py,   pz  }, {0.0f, 0.0f, pz  }, k_box);
+        add_line({0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, pz  }, k_box); // vertical pillars
+        add_line({px,   0.0f, 0.0f}, {px,   0.0f, pz  }, k_box);
+        add_line({0.0f, py,   0.0f}, {0.0f, py,   pz  }, k_box);
+    }
+
+    // Face diagonals through the origin corner
+    if (state_->show_face_diagonals)
+    {
+        add_line({0.0f, 0.0f, 0.0f}, {px, py, 0.0f}, k_face_diag_xy);
+        add_line({0.0f, 0.0f, 0.0f}, {px, 0.0f, pz}, k_face_diag_xz);
+        add_line({0.0f, 0.0f, 0.0f}, {0.0f, py, pz}, k_face_diag_yz);
+    }
+
+    // Staircase: bright X → Y → Z component legs
+    if (state_->show_component_legs)
+    {
+        add_line({0.0f, 0.0f, 0.0f}, {px,   0.0f, 0.0f}, k_x);
+        add_line({px,   0.0f, 0.0f}, {px,   py,   0.0f}, k_y);
+        add_line({px,   py,   0.0f}, {px,   py,   pz  }, k_z);
+    }
+
+    // Theta arc: polar angle from +Z to P, swept in the vertical plane containing Z and P
+    {
+        const float pmag = std::sqrt(px*px + py*py + pz*pz);
+        const float pxy  = std::sqrt(px*px + py*py);
+        if (pmag > 0.1f && pxy > 0.01f)
+        {
+            constexpr float arc_r = 1.5f;
+            constexpr int   arc_n = 24;
+            const float pxh   = px / pxy;
+            const float pyh   = py / pxy;
+            const float theta = std::acos(std::clamp(pz / pmag, -1.0f, 1.0f));
+            XMFLOAT3 prev = {0.0f, 0.0f, arc_r};
+            for (int i = 1; i <= arc_n; ++i)
+            {
+                const float t = theta * static_cast<float>(i) / static_cast<float>(arc_n);
+                const XMFLOAT3 cur = {arc_r * std::sin(t) * pxh,
+                                      arc_r * std::sin(t) * pyh,
+                                      arc_r * std::cos(t)};
+                add_line(prev, cur, k_theta_arc);
+                prev = cur;
+            }
+        }
+    }
+
+    // Vector P and its crosshair
+    add_line({0.0f, 0.0f, 0.0f}, {px, py, pz}, k_vector);
+    constexpr float m = 0.18f;
+    add_line({px - m, py,     pz    }, {px + m, py,     pz    }, k_point);
+    add_line({px,     py - m, pz    }, {px,     py + m, pz    }, k_point);
+    add_line({px,     py,     pz - m}, {px,     py,     pz + m}, k_point);
+}
+
+void LocalFrameGridRenderer::build_plane_slice_vertices()
+{
+    using namespace sim;
     const float locked = locked_component(state_->point, state_->active_plane);
 
+    // Active-plane grid
     for (int i = -6; i <= 6; ++i)
     {
         const float p = static_cast<float>(i);
         add_line(
             point_on_plane(state_->active_plane, -k_grid_extent, p, locked),
-            point_on_plane(state_->active_plane, k_grid_extent, p, locked),
-            grid_color);
+            point_on_plane(state_->active_plane,  k_grid_extent, p, locked), k_grid);
         add_line(
             point_on_plane(state_->active_plane, p, -k_grid_extent, locked),
-            point_on_plane(state_->active_plane, p, k_grid_extent, locked),
-            grid_color);
+            point_on_plane(state_->active_plane, p,  k_grid_extent, locked), k_grid);
     }
 
-    add_line(
-        point_on_plane(state_->active_plane, -k_grid_extent, -k_grid_extent, locked),
-        point_on_plane(state_->active_plane, k_grid_extent, -k_grid_extent, locked),
-        active_plane_color);
-    add_line(
-        point_on_plane(state_->active_plane, k_grid_extent, -k_grid_extent, locked),
-        point_on_plane(state_->active_plane, k_grid_extent, k_grid_extent, locked),
-        active_plane_color);
-    add_line(
-        point_on_plane(state_->active_plane, k_grid_extent, k_grid_extent, locked),
-        point_on_plane(state_->active_plane, -k_grid_extent, k_grid_extent, locked),
-        active_plane_color);
-    add_line(
-        point_on_plane(state_->active_plane, -k_grid_extent, k_grid_extent, locked),
-        point_on_plane(state_->active_plane, -k_grid_extent, -k_grid_extent, locked),
-        active_plane_color);
+    // Active-plane outline
+    add_line(point_on_plane(state_->active_plane, -k_grid_extent, -k_grid_extent, locked),
+             point_on_plane(state_->active_plane,  k_grid_extent, -k_grid_extent, locked), k_active_plane);
+    add_line(point_on_plane(state_->active_plane,  k_grid_extent, -k_grid_extent, locked),
+             point_on_plane(state_->active_plane,  k_grid_extent,  k_grid_extent, locked), k_active_plane);
+    add_line(point_on_plane(state_->active_plane,  k_grid_extent,  k_grid_extent, locked),
+             point_on_plane(state_->active_plane, -k_grid_extent,  k_grid_extent, locked), k_active_plane);
+    add_line(point_on_plane(state_->active_plane, -k_grid_extent,  k_grid_extent, locked),
+             point_on_plane(state_->active_plane, -k_grid_extent, -k_grid_extent, locked), k_active_plane);
 
+    // Depth hints (back wall)
     if (state_->show_lattice_depth)
     {
         for (int i = -6; i <= 6; i += 3)
         {
             const float p = static_cast<float>(i);
-            add_line({p, k_grid_extent, -k_depth_extent}, {p, k_grid_extent, k_depth_extent}, depth_color);
-            add_line({-k_grid_extent, p, -k_depth_extent}, {-k_grid_extent, p, k_depth_extent}, depth_color);
+            add_line({p, k_grid_extent, -k_depth_extent}, {p, k_grid_extent, k_depth_extent}, k_depth);
+            add_line({-k_grid_extent, p, -k_depth_extent}, {-k_grid_extent, p, k_depth_extent}, k_depth);
         }
-
-        add_line({-k_grid_extent, k_grid_extent, k_depth_extent}, {k_grid_extent, k_grid_extent, k_depth_extent}, depth_color);
-        add_line({-k_grid_extent, -k_grid_extent, k_depth_extent}, {-k_grid_extent, k_grid_extent, k_depth_extent}, depth_color);
-        add_line({-k_grid_extent, k_grid_extent, -k_depth_extent}, {k_grid_extent, k_grid_extent, -k_depth_extent}, depth_color);
-        add_line({-k_grid_extent, -k_grid_extent, -k_depth_extent}, {-k_grid_extent, k_grid_extent, -k_depth_extent}, depth_color);
+        add_line({-k_grid_extent, k_grid_extent,  k_depth_extent}, {k_grid_extent, k_grid_extent,  k_depth_extent}, k_depth);
+        add_line({-k_grid_extent, -k_grid_extent, k_depth_extent}, {-k_grid_extent, k_grid_extent, k_depth_extent}, k_depth);
+        add_line({-k_grid_extent, k_grid_extent,  -k_depth_extent}, {k_grid_extent, k_grid_extent,  -k_depth_extent}, k_depth);
+        add_line({-k_grid_extent, -k_grid_extent, -k_depth_extent}, {-k_grid_extent, k_grid_extent, -k_depth_extent}, k_depth);
     }
 
-    add_line({-k_grid_extent - 0.5f, 0.0f, 0.0f}, {k_grid_extent + 0.5f, 0.0f, 0.0f}, x_color);
-    add_line({0.0f, -k_grid_extent - 0.5f, 0.0f}, {0.0f, k_grid_extent + 0.5f, 0.0f}, y_color);
-    add_line({0.0f, 0.0f, -k_depth_extent - 0.5f}, {0.0f, 0.0f, k_depth_extent + 0.5f}, z_color);
+    // World axes
+    add_line({-k_grid_extent - 0.5f, 0.0f, 0.0f}, {k_grid_extent + 0.5f, 0.0f, 0.0f}, k_x);
+    add_line({0.0f, -k_grid_extent - 0.5f, 0.0f}, {0.0f, k_grid_extent + 0.5f, 0.0f}, k_y);
+    add_line({0.0f, 0.0f, -k_depth_extent - 0.5f}, {0.0f, 0.0f, k_depth_extent + 0.5f}, k_z);
 
-    const DirectX::XMFLOAT3 point = state_->point;
-    const DirectX::XMFLOAT3 slice_anchor =
-        point_on_plane(state_->active_plane, 0.0f, 0.0f, locked);
+    const XMFLOAT3 pt     = state_->point;
+    const XMFLOAT3 anchor = point_on_plane(state_->active_plane, 0.0f, 0.0f, locked);
+
+    // Component legs
     if (state_->show_component_legs)
     {
-        const float first = first_component(point, state_->active_plane);
-        const float second = second_component(point, state_->active_plane);
-        const DirectX::XMFLOAT3 first_axis_point =
-            point_on_plane(state_->active_plane, first, 0.0f, locked);
-        const DirectX::XMFLOAT3 second_axis_point =
-            point_on_plane(state_->active_plane, 0.0f, second, locked);
-        add_line(slice_anchor, first_axis_point, x_color);
-        add_line(first_axis_point, point, y_measure_color);
-        add_line(second_axis_point, point, x_measure_color);
+        const float first  = first_component(pt, state_->active_plane);
+        const float second = second_component(pt, state_->active_plane);
+        add_line(anchor,
+                 point_on_plane(state_->active_plane, first,  0.0f,   locked), k_x);
+        add_line(point_on_plane(state_->active_plane, first,  0.0f,   locked), pt, k_y_measure);
+        add_line(point_on_plane(state_->active_plane, 0.0f,   second, locked), pt, k_x_measure);
     }
 
-    constexpr float anchor_marker = 0.25f;
-    add_line(
-        point_on_plane(state_->active_plane, -anchor_marker, -anchor_marker, locked),
-        point_on_plane(state_->active_plane, anchor_marker, anchor_marker, locked),
-        slice_anchor_color);
-    add_line(
-        point_on_plane(state_->active_plane, -anchor_marker, anchor_marker, locked),
-        point_on_plane(state_->active_plane, anchor_marker, -anchor_marker, locked),
-        slice_anchor_color);
-    add_line({0.0f, 0.0f, 0.0f}, slice_anchor, slice_anchor_color);
+    // Slice-anchor marker and connector
+    constexpr float am = 0.25f;
+    add_line(point_on_plane(state_->active_plane, -am, -am, locked),
+             point_on_plane(state_->active_plane,  am,  am, locked), k_slice_anchor);
+    add_line(point_on_plane(state_->active_plane, -am,  am, locked),
+             point_on_plane(state_->active_plane,  am, -am, locked), k_slice_anchor);
+    add_line({0.0f, 0.0f, 0.0f}, anchor, k_slice_anchor);
 
-    add_line({0.0f, 0.0f, 0.0f}, point, vector_color);
-
-    constexpr float marker = 0.18f;
-    add_line({point.x - marker, point.y, point.z}, {point.x + marker, point.y, point.z}, point_color);
-    add_line({point.x, point.y - marker, point.z}, {point.x, point.y + marker, point.z}, point_color);
-    add_line({point.x, point.y, point.z - marker}, {point.x, point.y, point.z + marker}, point_color);
+    // Vector P and crosshair
+    add_line({0.0f, 0.0f, 0.0f}, pt, k_vector);
+    constexpr float m = 0.18f;
+    add_line({pt.x - m, pt.y,     pt.z    }, {pt.x + m, pt.y,     pt.z    }, k_point);
+    add_line({pt.x,     pt.y - m, pt.z    }, {pt.x,     pt.y + m, pt.z    }, k_point);
+    add_line({pt.x,     pt.y,     pt.z - m}, {pt.x,     pt.y,     pt.z + m}, k_point);
 }
 
-void LocalFrameGridRenderer::add_line(
-    DirectX::XMFLOAT3 start,
-    DirectX::XMFLOAT3 end,
-    DirectX::XMFLOAT4 color)
-{
-    if (vertices_.size() + 2 > k_max_vertices)
-    {
-        return;
-    }
-
-    vertices_.push_back(Vertex{start, color});
-    vertices_.push_back(Vertex{end, color});
-}
 } // namespace physics::gfx

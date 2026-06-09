@@ -62,6 +62,10 @@ Reusable primitive:
 
 ## Stage 3: Free 3D Vector
 
+Lesson:
+
+- `docs/lesson-06-local-frame-stage-03-free-3d-vector.md`
+
 Core idea:
 
 Magnitude, components, and diagonals generalize naturally from 2D to 3D.
@@ -83,6 +87,10 @@ Reusable primitive:
 - camera controls for later 3D simulators
 
 ## Stage 4: Rotated Local 3D Frame
+
+Lesson:
+
+- `docs/lesson-07-local-frame-stage-04-rotated-local-frame.md`
 
 Core idea:
 
